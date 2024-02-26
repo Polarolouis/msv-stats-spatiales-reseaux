@@ -14,7 +14,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ## Objectif
 
 Les espèces épibenthiques (qui vivent sur les fonds marins) sont des  biomarqueurs de l'état environnemental et des sources d'alimentation des poissons de la baie du Saint Laurent. Depuis plusieurs années des campagnes scientifiques sont menées pour mesurer la biomasse de ces espèces.
-Le Golfe du Saint Laurent est découpé en strates de milieux homogènes.   
+Le Golfe du Saint Laurent est découpé en strates de milieux homogènes. (discrétisation du problème)   
 Le fichier StLaurent.csv contient pour l'année 2000 les valeurs des variables suivantes :
 
 |strate  | numéro de la strate|
@@ -39,9 +39,9 @@ Le fichier *bornes.txt* donne pour les 38 strates les coordonnées des points fo
 Les packages R utilisés sont *spdep* et *spatialreg*.
 
 ```{r charger les packages,message=FALSE,warning=FALSE}
-require(spatialreg)
-require(spdep)
-library(sp)
+require(spatialreg) # Fait la régression spatiale, dvpé par économètres
+require(spdep) # Spatial dépendance
+library(sp) # Un peu ancienne, remplacé par Terra
 require(ggplot2)
 require(tidyverse)
 require(colorRamps)
@@ -66,7 +66,7 @@ Utiliser la fonction *traceStrates* pour visualiser les strates.
 ```{r trace carte, echo=FALSE,message=FALSE,warning=FALSE}
 source("tracePoly.R")
 coordStr = donnees[,1:3]
-traceStrates(coordStr,titre=?,couleur = ?)
+traceStrates(coordStr,titre="Strates",couleur = "lightblue")
 ```
 
 ## Systèmes de voisinage
@@ -74,49 +74,105 @@ Constituer plusieurs systèmes de voisinage (fonctions *tri2nb*, *knearneigh* et
 Etablir plusieurs matrices de poids (fonctions *nb2listw* et  *nb2mat*).
 
 ```{r Voisinages, message=FALSE,warning=FALSE}      
+# Couleurs
+coulcoor="red"
+coularete="blue"
+
 strate = as.character(donnees[,1])
-voisinage1 <- tri2nb(?,?) # par triangulation
-titre = ?
-plotVois(?,?,titre=titre,coulcoor=?,coularete=?)
+voisinage1 <- tri2nb(coords, row.names = strate) # par triangulation
+titre = "Voisinage par triangulation"
+plotVois(voisinage1,coords, titre=titre, coulcoor=coulcoor,coularete=coularete)
 
-ppv <- knearneigh(?, k=?,longlat = ?)
-voisinage2 = knn2nb(?)
-titre = ?
-plotVois(?,?,titre=titre,coulcoor=?,coularete=?)
 
-voisinage3 <- dnearneigh(?, d1=?, d2=?,longlat = ?)
-titre = ?
-plotVois(?,?,titre=titre,coulcoor=?,coularete=?)
+```
 
+Quand les aretes traversent des iles pas très pertinent, ou bien quand les aretes sont tres longues 
+due à la convexification. Pas mal pour les domaines au coeur. utilisé quand plus régulier
+
+```{r Voisinages_k_PPV, message=FALSE,warning=FALSE}      
+k <- 4
+ppv <- knearneigh(coords, k=k,longlat = TRUE) # fournir le k, longlat = TRUE pour convertir les données en degrées
+voisinage2 = knn2nb(ppv)
+titre = paste0("Voisinage par K=", k, " plus proches voisins")
+plotVois(voisinage2,coords,titre=titre,coulcoor=coulcoor,coularete=coularete)
+
+```
+
+Voisinage non symétriques, donc pas top pour les résultats nécessitant de la symétrie
+
+```{r Voisinages_distance, message=FALSE,warning=FALSE}  
+# Distance
+d1 <- 0
+d2 <- 65
+voisinage3 <- dnearneigh(coords, d1=d1, d2=d2,longlat = TRUE)
+titre = paste0("Voisinage par distance entre ", d1, " et ", d2, " plus proches voisins")
+plotVois(voisinage3, coords,titre=titre,coulcoor=coulcoor,coularete=coularete)
+
+# 
+```
+
+Nous on a degrés donc les distances en KM diff a interp, utilisé quand plus régulier
+
+```{r Voisinages_polygone, message=FALSE,warning=FALSE}  
 voisinage4 = poly2nb(StratePoly)
-titre = ?
-plotVois(?,?,titre=titre,coulcoor=?,coularete=?)
+titre = "Voisinage par partage de frontière des polygones"
+plotVois(voisinage4, coords,titre=titre,coulcoor=coulcoor,coularete=coularete)
 
+# 
+```
+
+Moins de traversée car non basé sur les centres, grandes disparités du nombre de frontières
+
+```{r, matrice_de_voisinage, message=FALSE,warning=FALSE}
 # matrice de voisinage
 #---------------------
 # B is the basic binary coding, 
-# W is row standardised (sums over all links to n), 
-# C is globally standardised (sums over all links to n), 
+# W is row standardised (sums over all links to n),
+# C is globally standardised (sums over all links to n) 
 # U is equal to C divided by the number of neighbours (sums over all links to unity), while 
 # S is the variance-stabilizing coding scheme proposed by Tiefelsdorf et al. 1999, p. 167-168 (sums over all links to n).
-voisinage = ?
-poids.vois <- nb2listw(voisinage,style=?)
-mat.vois   <- nb2mat(voisinage,style =?)
+voisinage = voisinage4
+poids.vois <- nb2listw(voisinage,style="W")
+mat.vois   <- nb2mat(voisinage,style ="W")
 poids.vois.sym = listw2U(poids.vois)  # pour symetriser W (pb avec plus proches voisins)
 ```
-## Autocorr\'elation
+
+Ici on conserve le voisinage par frontière (voisinage 4) et on calcule la 
+matrice de voisinage (adjacence) en normalisant par le total de la ligne 
+`(style="W")`.
+## Autocorrélation
 
 ### Données binaires
-Représenter la variable $BH$ sur la carte. Tester l'autocorrélation spatiale de la variable $BH$ (fonctions *joincount.test*, *joincount.mc*). Comment dépend le test des poids de voisinage?
+Représenter la variable $BH$ sur la carte. 
+Tester l'autocorrélation spatiale de la variable $BH$ 
+(fonctions *joincount.test*, *joincount.mc*). Comment dépend le test des poids de voisinage?
 
 ```{r donnees binaires, echo=FALSE,message=FALSE,warning=FALSE}  
-titre = ?
-traceStrates(coordStr,titre=titre,valeurs=?,couleur=?)
-
-print(joincount.mc(?,poids.vois.sym,nsim=?))
-print(joincount.test(?,poids.vois.sym))
+titre = "BH"
+traceStrates(coordStr,titre=titre,valeurs=donnees$BH,couleur="blue")
 ```
-          
+
+`joincount.mc` simule uniformément 100 échantillons et regarde où se trouve 
+notre échantillon observée. Cela grâce à une méthode de Monte-Carlo, le nombre 
+qui dépasse la valeur observée c'est 1 (notre échantillon), donc 
+$p = \frac{1}{101}$.
+
+```{r} 
+print(joincount.mc(donnees$BH,poids.vois.sym,nsim=100))
+```
+
+`jointcount.test` utilise un modèle sur les données pour réaliser un test
+
+```{r}
+print(joincount.test(donnees$BH,poids.vois.sym))
+```
+
+Ici `nonfree sampling` veut dire que l'on utilise le modèle hypergéométrique, et
+il regarde la statistique même couleur (0, blanc donc la stat BlancBlanc, et 1 pour NoirNoir).
+
+Sous le modèle hypergéométrique :
+$\mathbb{P} (NN) = \frac{n_1}{n} \frac{n_1 - 1}{n-1}, n_1 \text{: le nombre de noirs}$
+
 ### Indice de Moran et de Geary
 Représenter la variable $totconsum$ sur la carte.  Tester l'autocorrélation spatiale de la variable $totconsum$ \`a l'aide de l'indice de Moran
 (*moran.test*, *moran.mc*) avec ou sans randomisation.   
@@ -125,54 +181,120 @@ Tester l'autocorrélation spatiale de la variable $totconsum$ à l'aide de l'ind
 Comparer à l'indice de Moran.
 
 ```{r donnees continues, echo=FALSE,message=FALSE,warning=FALSE}
-titre = ?
-traceStrates(coordStr,valeurs=?,titre=titre,couleur=?)
-
-print(moran(?,poids.vois,length(?),Szero(poids.vois)))
-print(moran.mc(?,?,nsim=?))
-print(moran.test(?,?))
-print(moran.test(?,?,randomisation=F))
-print(sp.correlogram(voisinage,donnees$totconsum,order=5,method="I",zero.policy=T))
-plot(sp.correlogram(?,?,order=?,method="I",zero.policy=T))
-print(geary(?,?,length(?),length(?)-1,Szero(poids.vois)))
-print(geary.mc(?,?,nsim=?))
-print(geary.test(?,?))
-print(geary.test(?,?,randomisation=F))
+titre = "Valeur de prédations selon la zone"
+traceStrates(coordStr,valeurs=donnees$totconsum,titre=titre,couleur="red")
 ```
-          
+
+Ainsi on voit que la prédation est forte au bord des côtes, donc on s'attend à
+une corrélation spatiale.
+
+```{r indices_moran}
+print(moran(donnees$totconsum,poids.vois,length(strate),Szero(poids.vois)))
+print(moran.mc(donnees$totconsum,poids.vois,nsim=100))
+
+# Test sous hypothèse
+print(moran.test(donnees$totconsum,poids.vois))
+
+# Test sous hypothèse de Normalité
+print(moran.test(donnees$totconsum,poids.vois,randomisation=F))
+```
+
+L'indice de Moran imite la corrélation et est une extension au cas continu de la 
+stat NN :
+
+$$I = \frac{\frac{1}{\sum w_{i,j}} \sum w_{i,j} (Z_i - \bar{Z}) (Z_j - \bar{Z}) }{1/n \sum (Z_i - \bar{Z_i})^2}$$
+
+On trouve alors $I = `r moran(donnees$totconsum,poids.vois,length(strate),Szero(poids.vois))$I`$
+
+Sachant que $E_{H_0}(I) = \frac{-1}{n-1}$
+
+Modèle randomisé :
+$$\left{ z_1, \dots z_n \right}, P(Z_i = z_k) = \frac{1}{N}$$
+
+Modèle normal :
+$$\left{ z_1, \dots z_n \right}, Z_i \sim \mathcal{N}(\mu, \sigma^2)$$
+
+```{r geary}
+print(geary(donnees$totconsum,poids.vois,length(strate),length(strate)-1,Szero(poids.vois)))
+print(geary.mc(donnees$totconsum,poids.vois,nsim=100))
+print(geary.test(donnees$totconsum,poids.vois))
+print(geary.test(donnees$totconsum,poids.vois,randomisation=F))
+```
+Indice C de Geary, extension stat BN :
+
+$$C = \frac{\frac{1}{\sum w_{i,j}} \sum w_{i,j} (Z_i - Z_j)^2}{1/(n-1) \sum (Z_i - \bar{Z_i})^2}$$
+
+$$E_{H_0} (C) = 1$$ sous les deux modèles, randomisé et normal.
+
+- $C \simeq 0$, corrélation > 0
+- $C$ grand corrélation < 0 
+
+
+```{r correlogramme, echo = FALSE}
+print(sp.correlogram(voisinage,donnees$totconsum,order=6,method="I",zero.policy=T))
+plot(sp.correlogram(voisinage,donnees$totconsum,order=7,method="I",zero.policy=T))
+```
+
+Comme les tâches colorées se succèdent quand on augmente l'ordre on observe la 
+négativité car deux tâches très éloignés sont de couleurs différentes 
+
 ## Représentation des covariables
+
 Représenter les cartes de profondeur et température. 
+
 ```{r covariables,message=FALSE,warning=FALSE}
 titre = paste("Profondeur")
-traceStrates(coordStr,valeurs=?,titre=titre,couleur=?)
+traceStrates(coordStr,valeurs=donnees$depth,titre=titre,couleur="blue")
 titre = paste("Temperature")
-traceStrates(coordStr,valeurs=?,titre=titre,couleur=?)
-```	
+traceStrates(coordStr,valeurs=donnees$temperature,titre=titre,couleur="red")
+```
+
 ## Régression spatiale
+
 ```{r correlation, echo=FALSE,message=FALSE,warning=FALSE}
-ggpairs(donnees,columns = ?)
+ggpairs(donnees,columns = seq(5,7))
 ```
 
 ### Modèle linéaire
-Faire la régression linéaire de $totconsum$ sur $depth$ et $temperature$. Tester l'autocorrélation spatiale des résidus (fonction * lm.morantest*).   
+
+Un modèle linéaire simple serait :
+
+$$Y_i = \mu + \beta_{temp} Temperature_i + \beta_{profondeur} Profondeur_i + E_i, E_i \overset{\sim}^{iid} \mathcal{N}(0,\simga^2)$$
+
+Faire la régression linéaire de $totconsum$ sur $depth$ et $temperature$. 
+Tester l'autocorrélation spatiale des résidus (fonction * lm.morantest*).   
 Représenter la carte des résidus.
 
 ```{r modele lineaire, echo=FALSE,message=FALSE,warning=FALSE}
-ggpairs(donnees,columns = ?)
-
-totcons.lm <- lm(?) 
+totcons.lm <- lm(totconsum ~ depth + temperature, data = donnees) 
 summary(totcons.lm)
 anova(totcons.lm)
 
-lm.morantest(totcons.lm,poids.vois)
-
-res0 <- residuals(totcons.lm)
-moran.test(?,?) 
-titre = ?
-traceStrates(coordStr,valeurs=?,titre=titre,couleur=?)
+print(lm.morantest(totcons.lm,poids.vois)) 
 ```
 
+Donc on trouve de la corrélation spatiale dans les résidus par le test sur les
+résidus.
+
+```{r carte_residus}
+res0 <- residuals(totcons.lm)
+moran.test(res0,poids.vois.sym)
+titre = "Carte des résidus du modèle linéaire"
+traceStrates(coordStr,valeurs=res0,titre=titre,couleur="green")
+```
+
+Sur la carte voir cette corrélation spatiale est plus difficile que pour les 
+cartes précédentes. 
+
+Comme la profondeur (`depth`) n'est pas significative on la retire des tests 
+suivants.
+
 ### Modèles à erreur et retard SAR
+
+On va utiliser pour cela l'AIC (critère d'Akaike), dont la formule est
+
+$$AIC(Vraisemblance, p) = -2 \log(Vraisemblance) + 2 p$$
+
 
 Faire la régression linéaire  avec une erreur SAR  (*errorsarlm* ). 
 $$
@@ -180,8 +302,18 @@ $$
 $$
 Tester l'autocorrélation spatiale des résidus. Représenter la carte des résidus.
 ```{r}
-totcons.errorsarlm <- errorsarlm(? ,data=?,poids.vois) 
+totcons.errorsarlm <- errorsarlm(totconsum ~ temperature, data=donnees,poids.vois) 
+summary(totcons.errorsarlm)
+moran.test(residuals(totcons.errorsarlm), listw = poids.vois.sym)
 ```
+
+La p-valeur pour ce modèle est 
+
+```{r, echo = FALSE}
+titre="Carte des résidus du modèles avec une erreur SAR"
+traceStrates(coordStr,valeurs=totcons.errorsarlm$residuals,titre=titre,couleur="green")
+```
+
 
 Faire la régression linéaire  avec retard SAR (fonction *lagsarlm*).  
 $$
@@ -190,8 +322,20 @@ $$
 Tester l'autocorrélation spatiale des résidus. Représenter la carte des résidus.
 
 ```{r}
-totcons.lagsarlm <- lagsarlm(? ,data=?,poids.vois) 
+totcons.lagsarlm <- lagsarlm(totconsum ~ temperature, data=donnees, poids.vois)
+summary(totcons.lagsarlm)
 ```
+
+Avec uniquement du retard SAR, on obtient une p-valeur de $`r moran.test(residuals(totcons.lagsarlm), listw = poids.vois.sym)
+`$ qui est légèrement supérieure à 0.05.
+Mais en regardant le summary du test on voit que l'AIC obtenu est plus grande 
+que celle du modèle linéaire simple. 
+
+```{r, echo = FALSE}
+titre="Carte des résidus du modèles avec retard SAR"
+traceStrates(coordStr,valeurs=totcons.lagsarlm$residuals,titre=titre,couleur="green")
+```
+
 
 Faire la régression linéaire mixte  avec retard et erreur SAR (fonction  *lagsarlm, type='mixed'*).  
 $$
@@ -200,12 +344,35 @@ $$
 Tester l'autocorrélation spatiale des résidus. Représenter la carte des résidus.
 
 ```{r}
-totcons.mixed <- lagsarlm(? ,data=?,poids.vois,type="mixed") 
+totcons.mixed <- lagsarlm(totconsum ~ temperature, data=donnees, poids.vois,type="mixed") 
+summary(totcons.mixed)
 ```
+
+Avec du retard et de l'erreur SAR, on obtient une p-valeur de 
+$`r moran.test(residuals(totcons.mixed), listw = poids.vois.sym)`$ 
+qui est supérieure à 0.05. Donc le test de Moran ne nous permet pas de dire 
+qu'il y a de l'autocorrélation spatiale.
+
+```{r, echo = FALSE}
+titre="Carte des résidus du modèle SAR avec retard et erreur"
+traceStrates(coordStr,valeurs=totcons.mixed$residuals,titre=titre,couleur="green")
+```
+
 Même modèle, mais avec estimation par maximum de vraisemblance
 
 ```{r}
-totcons.sacsar = sacsarlm(?, poids.vois, data = ?)
+totcons.sacsar = sacsarlm(totconsum ~ temperature, poids.vois, data = donnees)
+summary(totcons.sacsar)
+```
+
+Et pour le test de l'indice de Moran on a 
+$`r moran.test(residuals(totcons.sacsar), listw = poids.vois.sym)`$. Donc 
+supérieure à 0.05.
+
+
+```{r, echo = FALSE}
+titre="Carte des résidus du modèles SACSAR"
+traceStrates(coordStr,valeurs=totcons.sacsar$residuals,titre=titre,couleur="green")
 ```
 
 ### Comparaison des modèles
@@ -214,9 +381,8 @@ Comparer les modèles à l'aide des fonctions *lm.LMtests, LR.sarlm, anova, AIC*
 Interpréter les coefficients obtenus dans chaque cas. Le système de voisinage a-t-il une influence?
 
 ```{r SAR, message=FALSE,warning=FALSE}
-lm.LMtests(?)
-LR.Sarlm(?)
-anova(?)
-AIC(?)
+lm.RStests(totcons.lm, listw = poids.vois.sym)
+LR.Sarlm(totcons.errorsarlm, totcons.mixed)
+print(anova(totcons.errorsarlm, totcons.lagsarlm, totcons.mixed, totcons.lm))
+AIC(totcons.errorsarlm, totcons.lagsarlm, totcons.mixed, totcons.lm, totcons.sacsar)
 ```
-
